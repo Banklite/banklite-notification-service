@@ -6,22 +6,55 @@ from sqlalchemy.orm import Session
 
 from ..database import SessionLocal, get_db
 from ..email_sender import get_user_email, send_email
+from ..whatsapp_sender import send_whatsapp
 from ..models import Notificacion
 from ..schemas import NotificacionCreate, NotificacionOut
 
 router = APIRouter(prefix="/notifications", tags=["notificaciones"])
 
 
-def _enviar_correo(id_notificacion: uuid.UUID, id_usuario: uuid.UUID, titulo: str, mensaje: str) -> None:
-    """Tarea en segundo plano: no retrasa la respuesta al servicio que notifica."""
+def _get_user_phone(id_usuario: uuid.UUID) -> str | None:
+    """Consulta el telefono del usuario a identity-service."""
+    import httpx
+    from ..config import settings
+    try:
+        r = httpx.get(
+            f"{settings.identity_service_url}/users/{id_usuario}",
+            timeout=settings.identity_timeout_seconds,
+        )
+        if r.status_code == 200:
+            return r.json().get("telefono")
+    except Exception:
+        pass
+    return None
+
+
+def _enviar_correo_y_whatsapp(
+    id_notificacion: uuid.UUID, id_usuario: uuid.UUID, titulo: str, mensaje: str
+) -> None:
+    """Tarea en segundo plano: envia correo y/o WhatsApp sin retrasar la respuesta."""
+    correo_ok = False
+    whatsapp_ok = False
+
+    # 1. Correo
     email = get_user_email(id_usuario)
-    if not email or not send_email(email, titulo, mensaje):
-        return
-    with SessionLocal() as db:
-        n = db.get(Notificacion, id_notificacion)
-        if n:
-            n.correo_enviado = True
-            db.commit()
+    if email:
+        correo_ok = send_email(email, titulo, mensaje)
+
+    # 2. WhatsApp
+    phone = _get_user_phone(id_usuario)
+    if phone:
+        texto_wa = f"*BankLite* - {titulo}\n\n{mensaje}"
+        whatsapp_ok = send_whatsapp(phone, texto_wa)
+
+    # Actualizar flags en la notificacion
+    if correo_ok or whatsapp_ok:
+        with SessionLocal() as db:
+            n = db.get(Notificacion, id_notificacion)
+            if n:
+                if correo_ok:
+                    n.correo_enviado = True
+                db.commit()
 
 
 @router.post("", response_model=NotificacionOut, status_code=status.HTTP_201_CREATED)
@@ -34,7 +67,7 @@ def crear_notificacion(payload: NotificacionCreate, tasks: BackgroundTasks, db: 
     db.commit()
     db.refresh(n)
     if payload.enviar_correo:
-        tasks.add_task(_enviar_correo, n.id_notificacion, n.id_usuario, n.titulo, n.mensaje)
+        tasks.add_task(_enviar_correo_y_whatsapp, n.id_notificacion, n.id_usuario, n.titulo, n.mensaje)
     return n
 
 

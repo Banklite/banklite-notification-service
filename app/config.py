@@ -17,5 +17,10 @@ class Settings(BaseSettings):
     resend_api_key: str | None = None
     email_from: str = "BankLite <onboarding@resend.dev>"
 
+    # WhatsApp Business Cloud API (Meta).
+    # Sin estas variables, WhatsApp no se envia (las demas notificaciones funcionan normal).
+    whatsapp_token: str | None = None
+    whatsapp_phone_id: str | None = None
+
 
 settings = Settings()
