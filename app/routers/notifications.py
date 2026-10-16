@@ -4,11 +4,18 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..database import SessionLocal, get_db
 from ..email_sender import get_user_email, send_email
-from ..whatsapp_sender import send_whatsapp
 from ..models import Notificacion
-from ..schemas import NotificacionCreate, NotificacionOut
+from ..schemas import (
+    ChannelStatusOut,
+    DirectEmailSend,
+    DirectWhatsAppSend,
+    NotificacionCreate,
+    NotificacionOut,
+)
+from ..whatsapp_sender import send_whatsapp
 
 router = APIRouter(prefix="/notifications", tags=["notificaciones"])
 
@@ -16,7 +23,6 @@ router = APIRouter(prefix="/notifications", tags=["notificaciones"])
 def _get_user_phone(id_usuario: uuid.UUID) -> str | None:
     """Consulta el telefono del usuario a identity-service."""
     import httpx
-    from ..config import settings
     try:
         r = httpx.get(
             f"{settings.identity_service_url}/users/{id_usuario}",
@@ -33,33 +39,73 @@ def _enviar_correo_y_whatsapp(
     id_notificacion: uuid.UUID, id_usuario: uuid.UUID, titulo: str, mensaje: str
 ) -> None:
     """Tarea en segundo plano: envia correo y/o WhatsApp sin retrasar la respuesta."""
-    correo_ok = False
-    whatsapp_ok = False
+    correo_resultado = {"ok": False}
+    whatsapp_resultado = {"ok": False}
 
     # 1. Correo
     email = get_user_email(id_usuario)
     if email:
-        correo_ok = send_email(email, titulo, mensaje)
+        correo_resultado = send_email(email, titulo, mensaje)
 
     # 2. WhatsApp
     phone = _get_user_phone(id_usuario)
     if phone:
         texto_wa = f"*BankLite* - {titulo}\n\n{mensaje}"
-        whatsapp_ok = send_whatsapp(phone, texto_wa)
+        whatsapp_resultado = send_whatsapp(phone, texto_wa)
 
-    # Actualizar flags en la notificacion
-    if correo_ok or whatsapp_ok:
+    # Actualizar flags en la notificacion si se envio o simulo exitosamente
+    if correo_resultado.get("ok") or whatsapp_resultado.get("ok"):
         with SessionLocal() as db:
             n = db.get(Notificacion, id_notificacion)
             if n:
-                if correo_ok:
+                if correo_resultado.get("ok"):
                     n.correo_enviado = True
                 db.commit()
 
 
+@router.get("/channels/status", response_model=ChannelStatusOut)
+def get_channel_status():
+    """Retorna el estado de los canales de salida de notificaciones (Gmail, Resend, WhatsApp)."""
+    return ChannelStatusOut(
+        gmail_configured=bool(settings.gmail_user and settings.gmail_app_password),
+        resend_configured=bool(settings.resend_api_key),
+        whatsapp_configured=bool(
+            (settings.whatsapp_token and settings.whatsapp_phone_id)
+            or (settings.greenapi_instance_id and settings.greenapi_api_token)
+            or settings.callmebot_apikey
+        ),
+        email_sandbox_active=settings.email_sandbox_enabled,
+        whatsapp_sandbox_active=settings.whatsapp_sandbox_enabled,
+    )
+
+
+@router.post("/send-email", status_code=status.HTTP_200_OK)
+def direct_send_email(payload: DirectEmailSend):
+    """API directa para enviar un correo electronico por Gmail SMTP / Resend."""
+    resultado = send_email(payload.to_email, payload.subject, payload.message, payload.html_content)
+    if not resultado.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Fallo el envio de correo: {resultado.get('detalle')}",
+        )
+    return resultado
+
+
+@router.post("/send-whatsapp", status_code=status.HTTP_200_OK)
+def direct_send_whatsapp(payload: DirectWhatsAppSend):
+    """API directa para enviar una notificacion por WhatsApp."""
+    resultado = send_whatsapp(payload.to_phone, payload.message)
+    if not resultado.get("ok"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Fallo el envio de WhatsApp: {resultado.get('detalle')}",
+        )
+    return resultado
+
+
 @router.post("", response_model=NotificacionOut, status_code=status.HTTP_201_CREATED)
 def crear_notificacion(payload: NotificacionCreate, tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """Crea un aviso (lo llama transfer-service u otros servicios) y opcionalmente envia correo."""
+    """Crea un aviso y dispara el despacho asincrono por Email y WhatsApp."""
     n = Notificacion(
         id_usuario=payload.id_usuario, tipo=payload.tipo, titulo=payload.titulo, mensaje=payload.mensaje
     )

@@ -23,3 +23,23 @@ class NotificacionOut(BaseModel):
     leida: bool
     correo_enviado: bool
     fecha: datetime
+
+
+class DirectEmailSend(BaseModel):
+    to_email: str
+    subject: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1)
+    html_content: str | None = None
+
+
+class DirectWhatsAppSend(BaseModel):
+    to_phone: str = Field(min_length=7, max_length=20)
+    message: str = Field(min_length=1, max_length=4096)
+
+
+class ChannelStatusOut(BaseModel):
+    gmail_configured: bool
+    resend_configured: bool
+    whatsapp_configured: bool
+    email_sandbox_active: bool
+    whatsapp_sandbox_active: bool
