@@ -112,18 +112,21 @@ def send_whatsapp(to_phone: str, message: str) -> dict:
         except Exception as exc:  # noqa: BLE001
             logger.warning("[META-WHATSAPP] Fallo: %s", exc)
 
-    # 4. Modo Sandbox: si no hay credenciales o los proveedores fallaron
+    # 4. Sandbox (solo desarrollo): se registra en el log pero NO cuenta como enviado.
     if settings.whatsapp_sandbox_enabled:
-        logger.info(
-            "[WHATSAPP-SANDBOX] [Destino: +%s]\n%s",
-            phone,
-            message,
-        )
-        return {
-            "ok": True,
-            "canal": "whatsapp_sandbox",
-            "detalle": f"Notificacion WhatsApp registrada para +{phone}",
-            "phone": phone,
-        }
+        logger.info("[WHATSAPP-SANDBOX] NO enviado. Destino: +%s", phone)
 
-    return {"ok": False, "canal": "ninguno", "detalle": "WhatsApp no configurado"}
+    configurado = bool(
+        (settings.greenapi_instance_id and settings.greenapi_api_token)
+        or settings.callmebot_apikey
+        or (settings.whatsapp_token and settings.whatsapp_phone_id)
+    )
+    return {
+        "ok": False,
+        "canal": "ninguno",
+        "detalle": (
+            "Ningun proveedor de WhatsApp logro entregar el mensaje"
+            if configurado
+            else "WhatsApp no configurado (GREENAPI_INSTANCE_ID/GREENAPI_API_TOKEN, CALLMEBOT_APIKEY o WHATSAPP_TOKEN)"
+        ),
+    }

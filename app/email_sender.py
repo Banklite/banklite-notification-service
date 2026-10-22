@@ -109,33 +109,67 @@ def send_email_via_resend(to: str, subject: str, text: str, html: str | None = N
         return False
 
 
-def send_email(to: str, subject: str, text: str, html: str | None = None) -> dict:
-    """Envia correo a traves de los canales configurados (Gmail -> Resend -> Sandbox).
-    
-    Retorna un diccionario con estado detallado: {'ok': bool, 'canal': str, 'detalle': str}.
-    """
-    # 1. Intentar Gmail SMTP si estan configuradas las credenciales
-    if settings.gmail_user and settings.gmail_app_password:
-        if send_email_via_gmail(to, subject, text, html):
-            return {"ok": True, "canal": "gmail_smtp", "detalle": f"Enviado via Gmail a {to}"}
+def send_email_via_brevo(to: str, subject: str, text: str, html: str | None = None) -> bool:
+    """Envia correo usando la API REST HTTP de Brevo (sirve en Render gratis)."""
+    if not settings.brevo_api_key or not settings.brevo_sender_email:
+        return False
 
-    # 2. Intentar Resend HTTP si esta configurada la API Key
+    try:
+        r = httpx.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={"api-key": settings.brevo_api_key, "accept": "application/json"},
+            json={
+                "sender": {"name": settings.brevo_sender_name, "email": settings.brevo_sender_email},
+                "to": [{"email": to}],
+                "subject": subject,
+                "htmlContent": html or _build_html_template(subject, text),
+                "textContent": text,
+            },
+            timeout=15.0,
+        )
+        if r.status_code >= 400:
+            logger.warning("[BREVO-API] Error %s: %s", r.status_code, r.text[:200])
+            return False
+        logger.info("[BREVO-API] Correo enviado a %s: '%s'", to, subject)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[BREVO-API] Fallo HTTP: %s", exc)
+        return False
+
+
+def send_email(to: str, subject: str, text: str, html: str | None = None) -> dict:
+    """Envia correo a traves de los canales configurados (Brevo -> Resend -> Gmail SMTP).
+
+    Los proveedores HTTP van primero porque Render (plan gratis) bloquea SMTP y un
+    intento a Gmail solo agregaria segundos de espera. Cada fallo pasa al siguiente.
+    Retorna {'ok': bool, 'canal': str, 'detalle': str}; 'ok' solo es True si un
+    proveedor real acepto el mensaje.
+    """
+    if settings.brevo_api_key and settings.brevo_sender_email:
+        if send_email_via_brevo(to, subject, text, html):
+            return {"ok": True, "canal": "brevo_api", "detalle": f"Enviado via Brevo a {to}"}
+
     if settings.resend_api_key:
         if send_email_via_resend(to, subject, text, html):
             return {"ok": True, "canal": "resend_api", "detalle": f"Enviado via Resend a {to}"}
 
-    # 3. Sandbox / Fallback para desarrollo sin credenciales
-    if settings.email_sandbox_enabled:
-        logger.info(
-            "[EMAIL-SANDBOX] [Destino: %s] [Asunto: %s]\nMensaje:\n%s",
-            to,
-            subject,
-            text,
-        )
-        return {
-            "ok": True,
-            "canal": "sandbox_local",
-            "detalle": f"Simulado en sandbox para {to} (configura GMAIL_USER o RESEND_API_KEY para envio real en vivo)",
-        }
+    if settings.gmail_user and settings.gmail_app_password:
+        if send_email_via_gmail(to, subject, text, html):
+            return {"ok": True, "canal": "gmail_smtp", "detalle": f"Enviado via Gmail a {to}"}
 
-    return {"ok": False, "canal": "ninguno", "detalle": "Sin proveedores de email configurados"}
+    configurado = bool(
+        (settings.brevo_api_key and settings.brevo_sender_email)
+        or settings.resend_api_key
+        or (settings.gmail_user and settings.gmail_app_password)
+    )
+    if settings.email_sandbox_enabled:
+        logger.info("[EMAIL-SANDBOX] NO enviado. Destino: %s | Asunto: %s", to, subject)
+    return {
+        "ok": False,
+        "canal": "ninguno",
+        "detalle": (
+            "Ningun proveedor de correo logro entregar el mensaje"
+            if configurado
+            else "Sin proveedores de correo configurados (BREVO_API_KEY, RESEND_API_KEY o GMAIL_USER/GMAIL_APP_PASSWORD)"
+        ),
+    }

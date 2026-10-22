@@ -16,7 +16,14 @@ class Settings(BaseSettings):
     resend_api_key: str | None = None
     email_from: str = "BankLite <onboarding@resend.dev>"
 
-    # Correo por Gmail SMTP (smtp.gmail.com:587 con contraseña de aplicación)
+    # Correo por Brevo (https://brevo.com): HTTP, funciona en Render gratis (que bloquea SMTP).
+    # BREVO_SENDER_EMAIL debe ser un remitente verificado en la cuenta de Brevo.
+    brevo_api_key: str | None = None
+    brevo_sender_email: str | None = None
+    brevo_sender_name: str = "BankLite"
+
+    # Correo por Gmail SMTP (smtp.gmail.com:587 con contraseña de aplicación).
+    # OJO: los web services gratuitos de Render bloquean los puertos SMTP.
     gmail_user: str | None = None
     gmail_app_password: str | None = None
     smtp_host: str = "smtp.gmail.com"
@@ -36,9 +43,11 @@ class Settings(BaseSettings):
     greenapi_instance_id: str | None = None
     greenapi_api_token: str | None = None
 
-    # Modo sandbox: si no hay credenciales de terceros, simula el despacho y loguea
-    email_sandbox_enabled: bool = True
-    whatsapp_sandbox_enabled: bool = True
+    # Modo sandbox (solo desarrollo): registra el mensaje en el log pero NO lo envia
+    # y lo reporta como NO entregado. Apagado por defecto: un envio fallido se
+    # informa como fallido, nunca como exitoso.
+    email_sandbox_enabled: bool = False
+    whatsapp_sandbox_enabled: bool = False
 
 
 

@@ -10,6 +10,7 @@ class NotificacionCreate(BaseModel):
     titulo: str = Field(max_length=120)
     mensaje: str
     enviar_correo: bool = True
+    enviar_whatsapp: bool = True
 
 
 class NotificacionOut(BaseModel):
@@ -37,7 +38,23 @@ class DirectWhatsAppSend(BaseModel):
     message: str = Field(min_length=1, max_length=4096)
 
 
+class CodigoSeguridadSend(BaseModel):
+    """Envio SINCRONO de un codigo de seguridad (2FA, reset, clave dinamica)."""
+
+    id_usuario: uuid.UUID
+    titulo: str = Field(min_length=1, max_length=120)
+    mensaje: str = Field(min_length=1)
+    enviar_whatsapp: bool = True
+
+
+class CodigoSeguridadOut(BaseModel):
+    entregado: bool
+    correo: dict
+    whatsapp: dict
+
+
 class ChannelStatusOut(BaseModel):
+    brevo_configured: bool = False
     gmail_configured: bool
     resend_configured: bool
     whatsapp_configured: bool

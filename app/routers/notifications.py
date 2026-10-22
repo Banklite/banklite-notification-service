@@ -10,6 +10,8 @@ from ..email_sender import get_user_email, send_email
 from ..models import Notificacion
 from ..schemas import (
     ChannelStatusOut,
+    CodigoSeguridadOut,
+    CodigoSeguridadSend,
     DirectEmailSend,
     DirectWhatsAppSend,
     NotificacionCreate,
@@ -36,7 +38,11 @@ def _get_user_phone(id_usuario: uuid.UUID) -> str | None:
 
 
 def _enviar_correo_y_whatsapp(
-    id_notificacion: uuid.UUID, id_usuario: uuid.UUID, titulo: str, mensaje: str
+    id_notificacion: uuid.UUID,
+    id_usuario: uuid.UUID,
+    titulo: str,
+    mensaje: str,
+    enviar_whatsapp: bool = True,
 ) -> None:
     """Tarea en segundo plano: envia correo y/o WhatsApp sin retrasar la respuesta."""
     correo_resultado = {"ok": False}
@@ -47,11 +53,12 @@ def _enviar_correo_y_whatsapp(
     if email:
         correo_resultado = send_email(email, titulo, mensaje)
 
-    # 2. WhatsApp
-    phone = _get_user_phone(id_usuario)
-    if phone:
-        texto_wa = f"*BankLite* - {titulo}\n\n{mensaje}"
-        whatsapp_resultado = send_whatsapp(phone, texto_wa)
+    # 2. WhatsApp (solo si el llamador lo solicito; evita spam de claves dinamicas)
+    if enviar_whatsapp:
+        phone = _get_user_phone(id_usuario)
+        if phone:
+            texto_wa = f"*BankLite* - {titulo}\n\n{mensaje}"
+            whatsapp_resultado = send_whatsapp(phone, texto_wa)
 
     # Actualizar flags en la notificacion si se envio o simulo exitosamente
     if correo_resultado.get("ok") or whatsapp_resultado.get("ok"):
@@ -67,6 +74,7 @@ def _enviar_correo_y_whatsapp(
 def get_channel_status():
     """Retorna el estado de los canales de salida de notificaciones (Gmail, Resend, WhatsApp)."""
     return ChannelStatusOut(
+        brevo_configured=bool(settings.brevo_api_key and settings.brevo_sender_email),
         gmail_configured=bool(settings.gmail_user and settings.gmail_app_password),
         resend_configured=bool(settings.resend_api_key),
         whatsapp_configured=bool(
@@ -103,6 +111,50 @@ def direct_send_whatsapp(payload: DirectWhatsAppSend):
     return resultado
 
 
+@router.post("/codigo-seguridad", response_model=CodigoSeguridadOut)
+def enviar_codigo_seguridad(payload: CodigoSeguridadSend, db: Session = Depends(get_db)):
+    """Entrega un codigo de seguridad (2FA / reset) de forma SINCRONA y honesta.
+
+    Responde 200 solo si al menos un canal (correo o WhatsApp) lo entrego de
+    verdad; si ninguno lo logro responde 502 para que quien llama pueda avisar
+    al usuario en vez de decirle que el codigo ya va en camino.
+
+    El texto con el codigo NO se guarda en la tabla notificacion (esa tabla se
+    puede listar por usuario y expondria el codigo); solo queda un aviso generico.
+    """
+    correo = {"ok": False, "canal": "ninguno", "detalle": "Usuario sin correo registrado"}
+    whatsapp = {"ok": False, "canal": "ninguno", "detalle": "No solicitado o usuario sin telefono"}
+
+    email = get_user_email(payload.id_usuario)
+    if email:
+        correo = send_email(email, payload.titulo, payload.mensaje)
+
+    if payload.enviar_whatsapp:
+        phone = _get_user_phone(payload.id_usuario)
+        if phone:
+            whatsapp = send_whatsapp(phone, f"*BankLite* - {payload.titulo}\n\n{payload.mensaje}")
+
+    entregado = bool(correo.get("ok") or whatsapp.get("ok"))
+
+    db.add(
+        Notificacion(
+            id_usuario=payload.id_usuario,
+            tipo="seguridad",
+            titulo=payload.titulo,
+            mensaje="Se envio un codigo de seguridad a tus canales registrados.",
+            correo_enviado=bool(correo.get("ok")),
+        )
+    )
+    db.commit()
+
+    if not entregado:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"No se pudo entregar el codigo. Correo: {correo.get('detalle')}. WhatsApp: {whatsapp.get('detalle')}",
+        )
+    return CodigoSeguridadOut(entregado=True, correo=correo, whatsapp=whatsapp)
+
+
 @router.post("", response_model=NotificacionOut, status_code=status.HTTP_201_CREATED)
 def crear_notificacion(payload: NotificacionCreate, tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Crea un aviso y dispara el despacho asincrono por Email y WhatsApp."""
@@ -113,7 +165,14 @@ def crear_notificacion(payload: NotificacionCreate, tasks: BackgroundTasks, db: 
     db.commit()
     db.refresh(n)
     if payload.enviar_correo:
-        tasks.add_task(_enviar_correo_y_whatsapp, n.id_notificacion, n.id_usuario, n.titulo, n.mensaje)
+        tasks.add_task(
+            _enviar_correo_y_whatsapp,
+            n.id_notificacion,
+            n.id_usuario,
+            n.titulo,
+            n.mensaje,
+            payload.enviar_whatsapp,
+        )
     return n
 
 
