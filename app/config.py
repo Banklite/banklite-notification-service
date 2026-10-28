@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://banklite:banklite@notification-db:5432/notification_db"
 
     identity_service_url: str = "http://identity-service:8001"
+    account_service_url: str = "http://account-service:8002"
+
+    # Bus de eventos (RabbitMQ). Apagado por defecto: se activa con ENABLE_CONSUMER=true.
+    rabbitmq_url: str = "amqp://banklite:banklite@rabbitmq:5672/"
+    events_exchange: str = "banklite.events"
+    events_queue: str = "notification.events"
+    enable_consumer: bool = False
     identity_timeout_seconds: float = 5.0
 
     # Correo por Resend (https://resend.com): HTTP

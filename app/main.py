@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .database import Base, engine, get_db
 from .models import Notificacion
+from .consumer import start_consumer, stop_consumer
 from .routers import notifications
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -19,8 +20,10 @@ logger = logging.getLogger(settings.service_name)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    start_consumer()
     logger.info("%s iniciado", settings.service_name)
     yield
+    stop_consumer()
 
 
 app = FastAPI(
