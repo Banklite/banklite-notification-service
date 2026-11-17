@@ -92,6 +92,25 @@ uvicorn app.main:app --reload --port 8007
 
 Prueba: abre <http://localhost:8007/docs>.
 
+## Pruebas automatizadas
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests -v --cov=app --cov-report=term-missing --cov-report=html
+```
+
+No necesitan PostgreSQL, RabbitMQ ni los otros microservicios: la base es SQLite en memoria y las dependencias externas se reemplazan con mocks (`unittest.mock`). El reporte navegable queda en `htmlcov/index.html`.
+
+| Tipo | Archivo | Que verifica |
+|---|---|---|
+| Unitaria (mocks) | `tests/unit/test_email_sender.py` | Cadena de proveedores de correo Brevo -> Resend -> Gmail con `httpx` y `smtplib` simulados; un envio fallido nunca se reporta como entregado. |
+| Unitaria (mocks) | `tests/unit/test_mensajes.py` | Texto de los avisos por evento (transferencia, compra con tarjeta, fraude) y formato de pesos colombianos. |
+| Integracion | `tests/integration/test_notifications_api.py` | Crear aviso -> base -> envio en segundo plano; bandeja y leidas; codigo de seguridad que no se guarda en la base; evento de card-service que termina en un aviso al titular. |
+
+Resultado actual: **32 pruebas** (18 unitarias y 14 de integracion), todas aprobadas, con **75 % de cobertura** de `app/`.
+
+En GitHub Actions las pruebas corren en cada `push` y `pull request`. Si una falla, la imagen no se construye y no se despliega. El reporte de cobertura queda en el resumen de la ejecucion y como artefacto descargable `coverage-banklite-notification-service`.
+
 ## Repositorios del proyecto
 
 `banklite-identity-service`, `banklite-account-service`, `banklite-ledger-service`, `banklite-transfer-service`, `banklite-card-service`, `banklite-fraud-service`, `banklite-notification-service`, `banklite-compliance-service`. Panel web: `services/web-panel` en el repositorio `banklite-microservicios`.
